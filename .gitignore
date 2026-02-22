@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+frames_raw/
+videos/
+videos_inbox/
+videos_done/
+splits/*.txt

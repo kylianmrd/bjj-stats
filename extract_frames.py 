@@ -1,0 +1,40 @@
+import cv2
+import os
+
+video_folder = "videos"
+output_folder = "frames/raw"
+fps_extract = 1  # images par seconde
+
+os.makedirs(output_folder, exist_ok=True)
+
+for video_name in os.listdir(video_folder):
+    if not video_name.endswith((".mp4", ".mov", ".avi")):
+        continue
+
+    video_path = os.path.join(video_folder, video_name)
+    cap = cv2.VideoCapture(video_path)
+
+    video_fps = cap.get(cv2.CAP_PROP_FPS)
+    step = int(video_fps / fps_extract)
+
+    frame_idx = 0
+    saved = 0
+
+    print(f"Traitement de {video_name}...")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if frame_idx % step == 0:
+            filename = f"{video_name.split('.')[0]}_{saved:05d}.jpg"
+            cv2.imwrite(os.path.join(output_folder, filename), frame)
+            saved += 1
+
+        frame_idx += 1
+
+    cap.release()
+    print(f"{saved} images extraites.")
+
+print("Extraction terminée.")
