@@ -26,10 +26,16 @@ def crop_vertical_15_percent(img):
 # 2️⃣ Transformations (propre, sans double resize)
 # --------------------------------------------------
 
-weights = models.MobileNet_V2_Weights.DEFAULT
-transforms.RandomRotation(10),
-transforms.RandomResizedCrop(224, scale=(0.85, 1.0)),
-mobilenet_preprocess = weights.transforms()  # ToTensor + Normalize (+ parfois resize/crop)
+mobilenet_weights = models.MobileNet_V2_Weights.DEFAULT
+
+# ImageNet normalization (standard, stable)
+mean = (0.485, 0.456, 0.406)
+std  = (0.229, 0.224, 0.225)
+
+mobilenet_preprocess = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=mean, std=std),
+])
 
 train_transform = transforms.Compose([
     transforms.Lambda(crop_vertical_15_percent),
@@ -54,47 +60,35 @@ from pathlib import Path
 from torchvision import datasets
 from torch.utils.data import DataLoader, Subset
 
-dataset = datasets.ImageFolder("dataset")
+from torch.utils.data import Dataset
 
-# Map: chemin relatif (posix) -> index
-# split_dataset.py écrit des chemins du style: dataset/close_guard/IMG_5265_00018.jpg
-root = Path(".").resolve()
+    
+dataset = datasets.ImageFolder("dataset", transform=None)
 
-def to_rel_posix(p: str) -> str:
-    pp = Path(p).resolve()
-    return pp.relative_to(root).as_posix()
+from sklearn.model_selection import train_test_split
 
-path_to_index = {to_rel_posix(p): i for i, (p, _) in enumerate(dataset.samples)}
+# Tous les indices
+all_indices = list(range(len(dataset)))
 
-def load_split_indices(txt_path: str):
-    indices = []
-    missing = []
-    with open(txt_path, "r") as f:
-        for line in f:
-            rel = line.strip()
-            if not rel:
-                continue
-            if rel not in path_to_index:
-                missing.append(rel)
-            else:
-                indices.append(path_to_index[rel])
-    if missing:
-        raise ValueError(
-            f"{len(missing)} fichiers listés dans {txt_path} introuvables dans ImageFolder.\n"
-            f"Exemples:\n" + "\n".join(missing[:10])
-        )
-    return indices
+# Tous les labels
+all_labels = [label for _, label in dataset.samples]
 
-train_idx = load_split_indices("splits/train.txt")
-val_idx   = load_split_indices("splits/val.txt")
-# test_idx  = load_split_indices("splits/test.txt")  # optionnel pour plus tard
+# Split stratifié (garde la proportion des classes)
+train_idx, val_idx = train_test_split(
+    all_indices,
+    test_size=0.18,   # ~18% validation
+    stratify=all_labels,
+    random_state=42
+)
 
-train_dataset = Subset(dataset, train_idx)
-val_dataset   = Subset(dataset, val_idx)
+train_dataset = datasets.ImageFolder("dataset", transform=train_transform)
+val_dataset   = datasets.ImageFolder("dataset", transform=val_transform)
+
+train_dataset = Subset(train_dataset, train_idx)
+val_dataset   = Subset(val_dataset, val_idx)
 
 # Appliquer transforms
-train_dataset.dataset.transform = train_transform
-val_dataset.dataset.transform   = val_transform
+from torch.utils.data import Dataset
 
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False)
@@ -106,7 +100,7 @@ print("Train images:", len(train_dataset), "| Val images:", len(val_dataset))
 # 4️⃣ Modèle MobileNetV2 (API propre)
 # --------------------------------------------------
 
-model = models.mobilenet_v2(weights=weights)
+model = models.mobilenet_v2(weights=mobilenet_weights)
 
 for param in model.features.parameters():
     param.requires_grad = False
@@ -126,7 +120,7 @@ model.classifier[1] = nn.Linear(num_features, len(dataset.classes))
 from collections import Counter
 import torch
 
-train_targets = [dataset.samples[i][1] for i in train_dataset.indices]
+train_targets = [dataset.samples[i][1] for i in train_idx]
 counts = Counter(train_targets)
 
 num_classes = len(dataset.classes)
@@ -146,7 +140,19 @@ optimizer = optim.Adam([
 # 6️⃣ Entraînement
 # --------------------------------------------------
 
+def evaluate(model, loader):
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for images, labels in loader:
+            outputs = model(images)
+            _, preds = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (preds == labels).sum().item()
+    return 100 * correct / total if total > 0 else float("nan")
+
 epochs = 10
+best_val = 0.0
 
 for epoch in range(epochs):
     t0 = time.time()
@@ -157,10 +163,8 @@ for epoch in range(epochs):
     
     for images, labels in train_loader:
         optimizer.zero_grad()
-        
         outputs = model(images)
         loss = criterion(outputs, labels)
-        
         loss.backward()
         optimizer.step()
         
@@ -174,13 +178,28 @@ for epoch in range(epochs):
     epoch_time = time.time() - t0
 
     print(
-    f"Epoch {epoch+1}/{epochs} | "
-    f"Loss: {running_loss/len(train_loader):.4f} | "
-    f"Accuracy: {accuracy:.2f}% | "
-    f"Time: {epoch_time:.1f}s",
-    flush=True
-)
+        f"Epoch {epoch+1}/{epochs} | "
+        f"Loss: {running_loss/len(train_loader):.4f} | "
+        f"Accuracy: {accuracy:.2f}% | "
+        f"Time: {epoch_time:.1f}s",
+        flush=True
+    )
 
+    val_acc = evaluate(model, val_loader)
+    print(f"Val Accuracy: {val_acc:.2f}%")
+
+    if val_acc > best_val:
+        best_val = val_acc
+        best_checkpoint = {
+          "model_state": model.state_dict(),
+          "classes": dataset.classes,
+          "img_size": 224,
+          "crop_vertical": 0.15,
+          "mean": mean,
+          "std": std,
+    }
+    torch.save(best_checkpoint, "bjj_model_best.pth")
+    print("✅ Saved best model (checkpoint)")
 
 # --------------------------------------------------
 # 7️⃣ Validation
@@ -242,8 +261,20 @@ print(classification_report(
 # 8️⃣ Sauvegarde
 # --------------------------------------------------
 
-torch.save(model.state_dict(), "bjj_model.pth")
-print("Modèle sauvegardé.")
+checkpoint = {
+    "model_state": model.state_dict(),
+    "classes": dataset.classes,
+    "img_size": 224,
+    "crop_vertical": 0.15,
+    "mean": mean, 
+    "std": std,
+}
+print(f"Best val = {best_val:.2f}% — modèle best déjà sauvegardé dans bjj_model_best.pth")
+
+best = torch.load("bjj_model_best.pth", map_location="cpu")
+model.load_state_dict(best["model_state"])
+model.eval()
+print("Loaded best model for test.jpg")
 
 # --------------------------------------------------
 # 9️⃣ Test sur image externe
