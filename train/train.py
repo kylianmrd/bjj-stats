@@ -10,7 +10,8 @@ seed = 42
 random.seed(seed)
 torch.manual_seed(seed)
 from sklearn.metrics import confusion_matrix, classification_report
-
+from pathlib import Path
+Path("models").mkdir(exist_ok=True)
 
 # --------------------------------------------------
 # 1️⃣ Crop vertical 15%
@@ -198,7 +199,7 @@ for epoch in range(epochs):
           "mean": mean,
           "std": std,
     }
-    torch.save(best_checkpoint, "bjj_model_best.pth")
+    torch.save(best_checkpoint, "models/bjj_model_best.pth")
     print("✅ Saved best model (checkpoint)")
 
 # --------------------------------------------------

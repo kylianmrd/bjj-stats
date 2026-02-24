@@ -1,9 +1,13 @@
 venv/
 __pycache__/
 *.pyc
-.DS_Store
+
+dataset/
+frames/
 frames_raw/
 videos/
 videos_inbox/
 videos_done/
-splits/*.txt
+
+*.pth
+!models/bjj_model_best.pth
